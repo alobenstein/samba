@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Get the current user's home directory
+user_home=$(eval echo ~$USER)
+
+# Function to check if script is run with sudo
+is_sudo() {
+    [ "$EUID" -eq 0 ]
+}
+
+# Check if script is run with sudo
+if is_sudo; then
+    # The script is run with sudo, set the user_home accordingly
+    echo "This script cannot be run with sudo. Exiting."
+    exit 1
+fi
+
+# Prompt the user for the Samba server's IP address
+echo "Enter the Samba server's IP address: "
+read smb_server_ip
+
+# Create file with Samba credentials in the user's home directory
+sudo touch "$user_home/.smbcredentials"
+echo "Enter the Samba server username: "
+read smb_username
+echo "Enter the Samba server password: "
+read -s smb_password
+echo "username=$smb_username" > "$user_home/.smbcredentials"
+echo "password='$smb_password'" >> "$user_home/.smbcredentials"
+sudo chown $USER:$USER "$user_home/.smbcredentials"
+sudo chmod 600 "$user_home/.smbcredentials"
+
+# Create a directory for the Samba share
+mkdir -p "$user_home/SharedFolder"
+
+# Create the executable file to mount the Samba share
+sudo touch "$user_home/smb_mount.sh"
+echo "#!/bin/bash" > "$user_home/smb_mount.sh"
+echo "mount -t cifs //$smb_server_ip/MyShare $user_home/SharedFolder -o credentials=$user_home/.smbcredentials,vers=2.0" >> "$user_home/smb_mount.sh"
+sudo chmod +x "$user_home/smb_mount.sh"
+
+# Create the systemd service file
+sudo touch "/etc/systemd/system/mount-shared-folder.service"
+echo "
+[Unit]
+Description=Mount Shared Folder at Startup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=$user_home/smb_mount.sh
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+" > "/etc/systemd/system/mount-shared-folder.service"
+
+# Enable and start the systemd service
+sudo systemctl enable mount-shared-folder.service
+sudo systemctl daemon-reload
+sudo systemctl restart mount-shared-folder.service
